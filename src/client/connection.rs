@@ -2,9 +2,10 @@
 
 //! session layer of a pool client
 
-use crate::poolclient::messages::{ClientCommand, Credentials, ErrorReply, JsonMessage,
-                           PoolCommand, PoolEvent, PoolReply, PoolRequest,
-                           Share, WorkerId, JobId, Job, JobAssignment};
+use crate::message::{
+    ClientCommand, Credentials, ErrorReply, Job, JobId, JsonMessage, PoolCommand, PoolEvent,
+    PoolReply, PoolRequest, Share, WorkerId,
+};
 
 use serde_json;
 
@@ -18,8 +19,10 @@ use failure::Fail;
 use log::{debug, info, warn};
 use serde_derive::{Deserialize, Serialize};
 
-pub type ClientResult<T> = Result<T, ClientError>;
+/// Result of client operation.
+pub type Result<T> = std::result::Result<T, Error>;
 
+/// Id for matching our requests with server replies.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq)]
 pub struct RequestId(u32);
 
@@ -43,7 +46,7 @@ impl ClientWriter {
         RequestId(id)
     }
 
-    fn send(&mut self, command: PoolCommand) -> ClientResult<RequestId> {
+    fn send(&mut self, command: PoolCommand) -> Result<RequestId> {
         let id = self.alloc_id();
         serde_json::to_writer(&mut self.stream, &PoolRequest { id, command })?;
         writeln!(&mut self.stream)?;
@@ -66,19 +69,20 @@ impl PoolClientReader {
         }
     }
 
-    pub fn read(&mut self) -> ClientResult<Option<PoolEvent<RequestId>>> {
+    pub fn read(&mut self) -> Result<Option<PoolEvent<RequestId>>> {
         self.buf.clear();
         if let Err(e) = self.stream.read_line(&mut self.buf) {
             return match e.kind() {
                 io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => Ok(None),
-                _ => Err(ClientError::from(e)),
+                _ => Err(Error::from(e)),
             };
         };
         debug!("read() success: \"{}\"", &self.buf);
         if self.buf.is_empty() {
-            return Err(ClientError::disconnected());
+            return Err(Error::disconnected());
         }
-        Ok((serde_json::from_str(&self.buf)?: JsonMessage<_>).body)
+        let msg: JsonMessage<_> = serde_json::from_str(&self.buf)?;
+        Ok(msg.body)
     }
 }
 
@@ -93,17 +97,20 @@ impl PoolClientWriter {
         PoolClientWriter { writer, worker_id }
     }
 
-    pub fn keepalive(&mut self) -> ClientResult<RequestId> {
-        self.writer.send(PoolCommand::KeepAlived{ id: self.worker_id })
+    /// Send a keepalive message.
+    pub fn keepalive(&mut self) -> Result<RequestId> {
+        self.writer
+            .send(PoolCommand::KeepAlived { id: self.worker_id })
     }
 
+    /// Submit a share.
     pub fn submit(
         &mut self,
         algo: &str,
         job_id: &JobId,
         nonce: u32,
         result: &[u8; 32],
-    ) -> ClientResult<RequestId> {
+    ) -> Result<RequestId> {
         self.writer.send(PoolCommand::Submit(Share {
             worker_id: self.worker_id,
             job_id: *job_id,
@@ -122,7 +129,7 @@ pub fn connect(
     pass: &str,
     agent: &str,
     keepalive: Option<Duration>,
-) -> ClientResult<(PoolClientWriter, Job, PoolClientReader)> {
+) -> Result<(PoolClientWriter, Job, PoolClientReader)> {
     let stream_r = TcpStream::connect(address)?;
     let stream_w = stream_r.try_clone()?;
 
@@ -131,31 +138,36 @@ pub fn connect(
     let mut writer = ClientWriter::new(stream_w);
     let algo = vec!["cn/1".to_owned()];
     let (login, pass, agent) = (login.to_owned(), pass.to_owned(), agent.to_owned());
-    let req_id = writer.send(PoolCommand::Login(Credentials { login, pass, agent, algo }))?;
+    let req_id = writer.send(PoolCommand::Login(Credentials {
+        login,
+        pass,
+        agent,
+        algo,
+    }))?;
     debug!("login sent: {:?}", req_id);
 
     stream_r.set_read_timeout(keepalive)?;
     let stream_r = BufReader::with_capacity(1500, stream_r);
     let mut reader = PoolClientReader::new(stream_r);
     let (wid, job, status) = loop {
-        match reader.read()?.ok_or_else(ClientError::login_timed_out)? {
+        match reader.read()?.ok_or_else(Error::login_timed_out)? {
             PoolEvent::PoolReply {
                 id,
                 error: None,
-                result: Some(PoolReply::Job(assignment))
+                result: Some(PoolReply::Job(assignment)),
             } => {
-                let JobAssignment { worker_id, status, job, .. } = *assignment;
                 debug_assert_eq!(id, req_id);
+                let worker_id = assignment.worker_id();
+                let status = assignment.status().map(|x| x.to_owned());
+                let job = assignment.into_job();
                 break (worker_id, job, status);
             }
-            PoolEvent::PoolReply {
-                error: Some(e), ..
-            } => return Err(ClientError::ErrorReply(e)),
+            PoolEvent::PoolReply { error: Some(e), .. } => return Err(Error(Error_::ErrorReply(e))),
             PoolEvent::ClientCommand(ClientCommand::Job(_)) => {
                 warn!("ignoring job notification received during login");
                 continue;
             }
-            _ => return Err(ClientError::login_unexpected_reply()),
+            _ => return Err(Error::login_unexpected_reply()),
         };
     };
     info!("login successful: status \"{:?}\"", status);
@@ -169,7 +181,11 @@ pub fn connect(
 ////////////////////
 
 #[derive(Fail, Debug)]
-pub enum ClientError {
+#[fail(display = "{}", _0)]
+pub struct Error(Error_);
+
+#[derive(Fail, Debug)]
+pub enum Error_ {
     #[fail(display = "{}", _0)]
     IoError(#[cause] io::Error),
     #[fail(display = "{}", _0)]
@@ -184,40 +200,39 @@ pub enum ClientError {
     ErrorReply(ErrorReply),
 }
 
-impl ClientError {
-    fn disconnected() -> ClientError {
-        ClientError::Disconnected
+impl Error {
+    fn disconnected() -> Self {
+        Error(Error_::Disconnected)
     }
-    fn login_timed_out() -> ClientError {
-        ClientError::LoginTimedOut
+    fn login_timed_out() -> Self {
+        Error(Error_::LoginTimedOut)
     }
-    fn login_unexpected_reply() -> ClientError {
-        ClientError::LoginUnexpectedReply
+    fn login_unexpected_reply() -> Self {
+        Error(Error_::LoginUnexpectedReply)
     }
 }
 
-impl From<io::Error> for ClientError {
+impl From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
-        ClientError::IoError(error)
+        Error(Error_::IoError(error))
     }
 }
 
-impl From<serde_json::Error> for ClientError {
+impl From<serde_json::Error> for Error {
     fn from(error: serde_json::Error) -> Self {
-        ClientError::MessageError(error)
+        Error(Error_::MessageError(error))
     }
 }
 
-impl From<ErrorReply> for ClientError {
+impl From<ErrorReply> for Error {
     fn from(error: ErrorReply) -> Self {
-        ClientError::ErrorReply(error)
+        Error(Error_::ErrorReply(error))
     }
 }
 
 ////////////////////
 // testing
 ////////////////////
-
 
 #[cfg(test)]
 mod tests {
@@ -245,20 +260,4 @@ mod tests {
     fn deserialize_job_command() {
         let _: PoolEvent<u32> = serde_json::from_str(EXAMPLE_JOBCOMMAND_STR).unwrap();
     }
-
-    /*
-    // fails because field order etc.; useful output for debugging
-    #[test]
-    fn serialize_job_command() {
-        let job = Job {
-            blob: JobBlob(String::from(concat!(
-                "06068795b8d0055b9272a308e09675e9c4c1510e84921e1ff0bfa13fc375eb8eec2207408205c0000",
-                "00000da5d4af05371b7bda75eef0d73cbbead3773006bd9117b1ca7dbcc9dacc1284d0d"))),
-            job_id: JobId(String::from("12023")),
-            target: Target(String::from("b7d10000"))
-        };
-        let msg = PoolEvent::ClientCommand(ClientCommand::Job(job));
-        assert_eq!(serde_json::to_string(&msg).unwrap(), EXAMPLE_JOBCOMMAND_STR);
-    }
-    */
 }

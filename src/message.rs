@@ -2,7 +2,7 @@
 
 //! Serialization for the JSON-RPC-based `CryptoNote` pool protocol
 
-use crate::poolclient::hexbytes;
+use crate::hexbytes;
 
 use arrayvec::ArrayString;
 use serde::Deserializer;
@@ -18,6 +18,7 @@ use std::fmt::{self, Display, Formatter};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WorkerId(ArrayString<[u8; 64]>);
 
+/// Server-defined Job identifier
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub struct JobId(ArrayString<[u8; 64]>);
 
@@ -38,17 +39,39 @@ where
     Ok(val)
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Description of what hash to try to find.
+#[derive(Debug, Deserialize, Clone)]
 pub struct Job {
     #[serde(deserialize_with = "hexbytes::hex_to_varbyte")]
-    pub blob: Vec<u8>,
-    pub job_id: JobId,
+    blob: Vec<u8>,
+    job_id: JobId,
     #[serde(deserialize_with = "deserialize_target")]
-    pub target: u64,
+    target: u64,
     #[serde(default)]
-    pub algo: Option<String>,
+    algo: Option<String>,
     #[serde(default)]
-    variant: u32, // xmrig sends this for compat with obsolete xmrig
+    variant: u32, // xmrig proxy sends this for compat with obsolete xmrig
+}
+
+impl Job {
+    /// Borrow the payload
+    pub fn blob(&self) -> &[u8] {
+        &self.blob
+    }
+
+    pub fn id(&self) -> JobId {
+        self.job_id
+    }
+
+    /// The goal hash
+    pub fn target(&self) -> u64 {
+        self.target
+    }
+
+    /// Algo-switching extension for some upstreams
+    pub fn algo(&self) -> Option<&str> {
+        self.algo.as_ref().map(|x| x.as_ref())
+    }
 }
 
 impl PartialEq<Job> for Job {
@@ -57,13 +80,13 @@ impl PartialEq<Job> for Job {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "lowercase")]
 pub enum ClientCommand {
     Job(Job),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct ErrorReply {
     code: i64,
     message: String,
@@ -81,7 +104,7 @@ impl Error for ErrorReply {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct JsonMessage<T> {
     #[serde(default)]
     pub jsonrpc: Option<String>,
@@ -91,18 +114,38 @@ pub struct JsonMessage<T> {
     pub body: T,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+/// Initial job assignment and reply to subsequent job requests
+#[derive(Debug, Deserialize)]
 pub struct JobAssignment {
     #[serde(rename = "id")]
-    pub worker_id: WorkerId,
-    pub job: Job,
+    worker_id: WorkerId,
+    job: Job,
     #[serde(default)]
-    pub status: Option<String>,
+    status: Option<String>,
     #[serde(default)]
-    pub extensions: Vec<String>,
+    extensions: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl JobAssignment {
+    /// Server-defined token identifying our connection
+    pub fn worker_id(&self) -> WorkerId {
+        self.worker_id
+    }
+    /// Return the new Job itself.
+    pub fn into_job(self) -> Job {
+        self.job
+    }
+    /// Optional messague, usually something friendly like "OK"
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_ref().map(|x| x.as_ref())
+    }
+    /// Protocol extensions supported by the server
+    pub fn extensions(&self) -> impl Iterator<Item = &str> {
+        self.extensions.iter().map(|x| x.as_ref())
+    }
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum PoolReply {
     /// reply to getjob (not implemented) and login
@@ -112,7 +155,7 @@ pub enum PoolReply {
 }
 
 /// Message received from pool (reply or job notification).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum PoolEvent<ReqId> {
     ClientCommand(ClientCommand),
@@ -125,7 +168,7 @@ pub enum PoolEvent<ReqId> {
 
 ////////// worker -> server
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct Share {
     #[serde(rename = "id")]
     pub worker_id: WorkerId,
@@ -137,7 +180,7 @@ pub struct Share {
     pub algo: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct Credentials {
     pub login: String,
     pub pass: String,
@@ -145,12 +188,12 @@ pub struct Credentials {
     pub algo: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(tag = "method", content = "params", rename_all = "lowercase")]
 pub enum PoolCommand {
     Submit(Share),
     Login(Credentials),
-    KeepAlived{ id: WorkerId },
+    KeepAlived { id: WorkerId },
 }
 
 /// Message sent from client to pool.
@@ -160,7 +203,7 @@ pub enum PoolCommand {
 /// expect the same type to come back in replies. If you are receiving
 /// the requests, you should use a generic type like
 /// `serde_json::Value`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct PoolRequest<ReqId> {
     pub id: ReqId,
     #[serde(flatten)]

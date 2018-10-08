@@ -48,8 +48,8 @@ where
 pub fn u32_to_hex_string_bytes_padded(n: u32) -> ArrayVec<[u8; 8]> {
     let mut buf = ArrayVec::new();
     for i in 0..4 {
-        let x0 = (n >> (8*i+4)) & 0xfu32;
-        let x1 = (n >> (8*i)) & 0xfu32;
+        let x0 = (n >> (8 * i + 4)) & 0xfu32;
+        let x1 = (n >> (8 * i)) & 0xfu32;
         buf.push(nibble_to_hex(x0 as u8).unwrap());
         buf.push(nibble_to_hex(x1 as u8).unwrap());
     }
@@ -72,11 +72,11 @@ where
     if bytes_in.len() & 0x1 != 0 {
         return Err(Error::custom("odd-length hex blob"));
     }
-    (bytes_in
-        .chunks_exact(2)
+    let result: Result<Vec<_>, _> = bytes_in
+        .chunks(2)
         .map(|ab| hex_to_nibble(ab[0]).and_then(|a| Ok(a << 4 | hex_to_nibble(ab[1])?)))
-        .collect(): Result<Vec<_>, _>)
-        .map_err(|_| Error::custom("non-hex char in input"))
+        .collect();
+    result.map_err(|_| Error::custom("non-hex char in input"))
 }
 
 use serde::de::{self, Visitor};
@@ -101,8 +101,12 @@ impl<'de> Visitor<'de> for Hex64leStrVisitor {
         }
         let mut out = 0u64;
         for (i, xs) in hex_in.chunks(2).enumerate() {
-            let nib0 = u64::from(hex_to_nibble(xs[0]).map_err(|_| Error::custom("non-hex char in input"))?);
-            let nib1 = u64::from(hex_to_nibble(xs[1]).map_err(|_| Error::custom("non-hex char in input"))?);
+            let nib0 = u64::from(
+                hex_to_nibble(xs[0]).map_err(|_| Error::custom("non-hex char in input"))?,
+            );
+            let nib1 = u64::from(
+                hex_to_nibble(xs[1]).map_err(|_| Error::custom("non-hex char in input"))?,
+            );
             out |= nib0 << (i * 8 + 4);
             out |= nib1 << (i * 8);
         }
