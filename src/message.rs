@@ -59,7 +59,7 @@ impl Job {
         &self.blob
     }
 
-    pub fn id(&self) -> JobId {
+    pub(crate) fn id(&self) -> JobId {
         self.job_id
     }
 

@@ -3,7 +3,7 @@
 //! session layer of a pool client
 
 use crate::message::{
-    ClientCommand, Credentials, ErrorReply, Job, JobId, JsonMessage, PoolCommand, PoolEvent,
+    ClientCommand, Credentials, ErrorReply, Job, JsonMessage, PoolCommand, PoolEvent,
     PoolReply, PoolRequest, Share, WorkerId,
 };
 
@@ -106,17 +106,16 @@ impl PoolClientWriter {
     /// Submit a share.
     pub fn submit(
         &mut self,
-        algo: &str,
-        job_id: &JobId,
+        job: &Job,
         nonce: u32,
         result: &[u8; 32],
     ) -> Result<RequestId> {
         self.writer.send(PoolCommand::Submit(Share {
             worker_id: self.worker_id,
-            job_id: *job_id,
+            job_id: job.id(),
             nonce,
             result: *result,
-            algo: algo.to_owned(),
+            algo: job.algo().map(|a| a.to_owned()).unwrap_or_else(String::new),
         }))
         // 1 PoolReply::StatusReply expected
     }

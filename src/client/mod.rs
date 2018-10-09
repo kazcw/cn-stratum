@@ -9,7 +9,7 @@ use self::connection::PoolClientReader;
 use crate::message::{ClientCommand, PoolEvent, PoolReply};
 
 pub use self::connection::{PoolClientWriter, RequestId, Result};
-pub use crate::message::{ErrorReply, Job, JobAssignment, JobId};
+pub use crate::message::{ErrorReply, Job, JobAssignment};
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
