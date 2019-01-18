@@ -73,7 +73,7 @@ where
         return Err(Error::custom("odd-length hex blob"));
     }
     let result: Result<Vec<_>, _> = bytes_in
-        .chunks(2)
+        .chunks_exact(2)
         .map(|ab| hex_to_nibble(ab[0]).and_then(|a| Ok(a << 4 | hex_to_nibble(ab[1])?)))
         .collect();
     result.map_err(|_| Error::custom("non-hex char in input"))
@@ -100,7 +100,7 @@ impl<'de> Visitor<'de> for Hex64leStrVisitor {
             return Err(Error::custom("too many input bytes for hex64le"));
         }
         let mut out = 0u64;
-        for (i, xs) in hex_in.chunks(2).enumerate() {
+        for (i, xs) in hex_in.chunks_exact(2).enumerate() {
             let nib0 = u64::from(
                 hex_to_nibble(xs[0]).map_err(|_| Error::custom("non-hex char in input"))?,
             );
